@@ -1,10 +1,9 @@
-import argparse
-import getpass
-import subprocess
-import sys
-
-from .keywords import get_all_keywords, load_keyword_categories
-from .settings_manager import (
+from core.input_validation import validate_terminal_text
+from core.keywords import (
+    get_all_keywords,
+    load_keyword_categories,
+)
+from core.settings import (
     COLLECTION_MODE_MENU_ORDER,
     COLLECTION_MODES,
     PROJECT_ROOT,
@@ -27,7 +26,10 @@ def pause():
     Waits for the user before returning to a menu.
     """
 
-    input("\nPress Enter to continue...")
+    try:
+        input("\nPress Enter to continue...")
+    except KeyboardInterrupt:
+        print()
 
 
 def print_main_header():
@@ -38,6 +40,30 @@ def print_main_header():
     print()
     print("RMIT Reddit Course Experience Extractor")
     print("=" * 45)
+
+
+def read_menu_choice(prompt, allowed_options):
+    """
+    Reads and validates a menu option.
+    """
+
+    try:
+        choice = input(prompt).strip()
+        choice = validate_terminal_text(
+            value=choice,
+            field_name="Menu option",
+            allow_empty=False,
+            max_length=10,
+        )
+    except ValueError:
+        print(f"Invalid option. Please choose one of: {', '.join(allowed_options)}.")
+        return None
+
+    if choice not in allowed_options:
+        print(f"Invalid option. Please choose one of: {', '.join(allowed_options)}.")
+        return None
+
+    return choice
 
 
 def print_current_extraction_settings():
@@ -72,17 +98,45 @@ def setup_reddit_credentials():
     print("The credentials will be saved locally in .env.")
     print()
 
-    client_id = input("Reddit client ID: ").strip()
-    client_secret = getpass.getpass("Reddit client secret: ").strip()
-    user_agent = input(
-        "Reddit user agent "
-        "(example: rmit_ces_research_script_by_yourusername): "
-    ).strip()
+    try:
+        client_id = validate_terminal_text(
+            input("Reddit client ID: "),
+            field_name="Reddit client ID",
+            allow_empty=False,
+            max_length=200,
+        )
 
-    author_hash_salt = getpass.getpass(
-        "Author hash salt "
-        "(optional privacy salt; press Enter to use default): "
-    ).strip()
+        client_secret = validate_terminal_text(
+            getpass.getpass("Reddit client secret: "),
+            field_name="Reddit client secret",
+            allow_empty=False,
+            max_length=300,
+        )
+
+        user_agent = validate_terminal_text(
+            input("Reddit user agent (example: rmit_ces_research_script_by_yourusername): "),
+            field_name="Reddit user agent",
+            allow_empty=False,
+            max_length=300,
+        )
+
+        author_hash_salt = validate_terminal_text(
+            getpass.getpass("Author hash salt (optional privacy salt; press Enter to use default): "),
+            field_name="Author hash salt",
+            allow_empty=True,
+            max_length=300,
+        )
+
+    except KeyboardInterrupt:
+        print()
+        print("Credential setup cancelled by user.")
+        return
+
+    except ValueError as error:
+        print()
+        print("Could not save credentials.")
+        print(f"Reason: {error}")
+        return
 
     env_lines = [
         f"REDDIT_CLIENT_ID={client_id}",
@@ -95,9 +149,16 @@ def setup_reddit_credentials():
 
     env_file = PROJECT_ROOT / ".env"
 
-    with open(env_file, "w", encoding="utf-8") as file:
-        file.write("\n".join(env_lines))
-        file.write("\n")
+    try:
+        with open(env_file, "w", encoding="utf-8") as file:
+            file.write("\n".join(env_lines))
+            file.write("\n")
+    except OSError as error:
+        print()
+        print("Could not write the .env file.")
+        print("Check project folder permissions and try again.")
+        print(f"Reason: {error}")
+        return
 
     print()
     print(f"Credentials saved to: {env_file}")
@@ -117,7 +178,7 @@ def validate_setup():
     print("-" * 45)
 
     try:
-        from .config import (
+        from rmit_ces_reddit_extractor.core.runtime_config import (
             ACTIVE_COLLECTION_MODE,
             END_DATE_LOCAL,
             KEYWORDS_FILE,
@@ -128,6 +189,7 @@ def validate_setup():
         )
 
         validate_config()
+        load_keyword_categories()
 
         print("Setup looks good.")
         print(f"Settings file: {SETTINGS_FILE}")
@@ -135,6 +197,11 @@ def validate_setup():
         print(f"Subreddit: r/{SUBREDDIT_NAME}")
         print(f"Date range: {START_DATE_LOCAL.date()} to {END_DATE_LOCAL.date()}")
         print(f"CES collection mode: {ACTIVE_COLLECTION_MODE['label']}")
+
+    except ModuleNotFoundError as error:
+        print("Setup validation failed.")
+        print(f"Reason: {error}")
+        print("Run: pip install -r requirements.txt")
 
     except Exception as error:
         print("Setup validation failed.")
@@ -185,18 +252,31 @@ def set_time_range_menu():
     print("Set Time Range")
     print("-" * 45)
     print("Start Date is mandatory.")
-    print("End Date is optional.")
+    print("End Date is optional. Leave it blank to use today's date when extraction runs.")
     print()
 
-    start_date = input("Enter start date (YYYY-MM-DD): ").strip()
-    end_date = input(
-        "Enter end date (YYYY-MM-DD), or press Enter to use today: "
-    ).strip()
-
     try:
+        start_date = validate_terminal_text(
+            input("Enter start date (YYYY-MM-DD): "),
+            field_name="Start date",
+            allow_empty=False,
+            max_length=20,
+        )
+
+        end_date = validate_terminal_text(
+            input("Enter end date (YYYY-MM-DD), or press Enter to use today: "),
+            field_name="End date",
+            allow_empty=True,
+            max_length=20,
+        )
+
         update_time_range(start_date, end_date)
         print()
         print("Time range saved.")
+
+    except KeyboardInterrupt:
+        print()
+        print("Time range update cancelled by user.")
 
     except Exception as error:
         print()
@@ -229,7 +309,22 @@ def ces_collection_settings_menu():
         print(f"   Downside: {mode['downside']}")
         print()
 
-    selected_option = input("Select option [1-4]: ").strip()
+    try:
+        selected_option = validate_terminal_text(
+            input("Select option [1-4]: "),
+            field_name="CES collection option",
+            allow_empty=False,
+            max_length=5,
+        )
+    except KeyboardInterrupt:
+        print()
+        print("CES collection settings cancelled by user.")
+        return
+    except ValueError as error:
+        print()
+        print(f"Invalid option. {error}")
+        return
+
     selected_mode = get_collection_mode_by_menu_number(selected_option)
 
     if selected_mode is None:
@@ -252,6 +347,32 @@ def ces_collection_settings_menu():
 # Option 4.3: extraction
 # ------------------------------------------------------------
 
+def stop_extraction_process(process):
+    """
+    Stops the child extraction process after Ctrl+C.
+    """
+
+    if process.poll() is not None:
+        return
+
+    try:
+        process.send_signal(signal.SIGINT)
+        process.wait(timeout=15)
+    except subprocess.TimeoutExpired:
+        print("Extractor did not stop after Ctrl+C. Terminating process...")
+        process.terminate()
+
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            print("Extractor did not terminate. Killing process...")
+            process.kill()
+            process.wait()
+    except Exception:
+        process.terminate()
+        process.wait()
+
+
 def start_extraction_from_menu():
     """
     Starts extraction as a separate Python process.
@@ -262,25 +383,66 @@ def start_extraction_from_menu():
 
     print_current_extraction_settings()
     print()
-    confirm = input("Start extraction with these settings? [y/N]: ").strip().lower()
 
-    if confirm != "y":
+    try:
+        confirm = validate_terminal_text(
+            input("Start extraction with these settings? [y/N]: "),
+            field_name="Confirmation",
+            allow_empty=True,
+            max_length=5,
+        )
+    except KeyboardInterrupt:
+        print()
+        print("Extraction cancelled.")
+        return
+    except ValueError as error:
+        print()
+        print(f"Extraction cancelled. Reason: {error}")
+        return
+
+    if not is_yes(confirm):
         print("Extraction cancelled.")
         return
 
     print()
     print("Starting extraction...")
-    print("This may take some time depending on the selected CES collection mode.")
+    print("Press Ctrl+C to stop safely and save the data collected so far.")
     print()
 
-    command = [sys.executable, "-m", "src.extract_reddit"]
-    result = subprocess.run(command, cwd=PROJECT_ROOT)
+    command = [
+        sys.executable,
+        "-m",
+        "backend.reddit_extractor",
+    ]
 
-    if result.returncode == 0:
-        print()
-        print("Extraction finished.")
+    environment = os.environ.copy()
+    source_directory = str(PROJECT_ROOT / "src")
+    existing_python_path = environment.get("PYTHONPATH", "")
+
+    if existing_python_path:
+        environment["PYTHONPATH"] = source_directory + os.pathsep + existing_python_path
     else:
+        environment["PYTHONPATH"] = source_directory
+
+    process = subprocess.Popen(command, cwd=PROJECT_ROOT, env=environment)
+
+    try:
+        return_code = process.wait()
+    except KeyboardInterrupt:
         print()
+        print("Extraction stop requested by user.")
+        print("Waiting for the extractor to save partial results...")
+        stop_extraction_process(process)
+        print("Extraction stopped safely. Returning to menu.")
+        return
+
+    print()
+
+    if return_code == 0:
+        print("Extraction finished.")
+    elif return_code == 130:
+        print("Extraction stopped by user. Partial data was saved if any rows were collected.")
+    else:
         print("Extraction ended with an error. Check the terminal output and logs.")
 
 
@@ -301,9 +463,12 @@ def run_extraction_menu():
         print("4.4 Back to main menu")
         print()
 
-        choice = input("Select option: ").strip()
+        choice = read_menu_choice("Select option: ", ["4.1", "4.2", "4.3", "4.4"])
 
-        if choice == "4.1":
+        if choice is None:
+            pause()
+
+        elif choice == "4.1":
             set_time_range_menu()
             pause()
 
@@ -318,10 +483,6 @@ def run_extraction_menu():
         elif choice == "4.4":
             return
 
-        else:
-            print("Invalid option. Please choose 4.1, 4.2, 4.3, or 4.4.")
-            pause()
-
 
 # ------------------------------------------------------------
 # Option 5: summary
@@ -333,9 +494,15 @@ def show_summary():
     """
 
     try:
-        from .summary import show_dataset_summary
+        from reports.dataset_summary import show_dataset_summary
 
         show_dataset_summary()
+
+    except ModuleNotFoundError as error:
+        print()
+        print("Could not show dataset summary.")
+        print(f"Reason: {error}")
+        print("Run: pip install -r requirements.txt")
 
     except Exception as error:
         print()
@@ -353,44 +520,50 @@ def main_menu():
     """
 
     while True:
-        print_main_header()
-        print()
-        print("1. Setup Reddit credentials")
-        print("2. Validate setup")
-        print("3. Check keywords")
-        print("4. Run extraction")
-        print("5. Show dataset summary")
-        print("6. Exit")
-        print()
+        try:
+            print_main_header()
+            print()
+            print("1. Setup Reddit credentials")
+            print("2. Validate setup")
+            print("3. Check keywords")
+            print("4. Run extraction")
+            print("5. Show dataset summary")
+            print("6. Exit")
+            print()
 
-        choice = input("Select option: ").strip()
+            choice = read_menu_choice("Select option: ", ["1", "2", "3", "4", "5", "6"])
 
-        if choice == "1":
-            setup_reddit_credentials()
-            pause()
+            if choice is None:
+                pause()
 
-        elif choice == "2":
-            validate_setup()
-            pause()
+            elif choice == "1":
+                setup_reddit_credentials()
+                pause()
 
-        elif choice == "3":
-            check_keywords()
-            pause()
+            elif choice == "2":
+                validate_setup()
+                pause()
 
-        elif choice == "4":
-            run_extraction_menu()
+            elif choice == "3":
+                check_keywords()
+                pause()
 
-        elif choice == "5":
-            show_summary()
-            pause()
+            elif choice == "4":
+                run_extraction_menu()
 
-        elif choice == "6":
+            elif choice == "5":
+                show_summary()
+                pause()
+
+            elif choice == "6":
+                print("Goodbye.")
+                return
+
+        except KeyboardInterrupt:
+            print()
+            print("Program closed by user.")
             print("Goodbye.")
             return
-
-        else:
-            print("Invalid option. Please choose between 1 and 6.")
-            pause()
 
 
 # ------------------------------------------------------------
@@ -410,9 +583,9 @@ def cli_keywords_command(_args):
 
 
 def cli_extract_command(_args):
-    from .extract_reddit import main as extract_main
+    from backend.reddit_extractor import main as extract_main
 
-    extract_main()
+    raise SystemExit(extract_main())
 
 
 def cli_summary_command(_args):
@@ -457,7 +630,7 @@ def build_parser():
 
 def main():
     """
-    Entry point for python -m src.cli.
+    Entry point for python -m rmit_ces_reddit_extractor.cli.menu.
     """
 
     parser = build_parser()
@@ -467,7 +640,12 @@ def main():
         main_menu()
         return
 
-    args.func(args)
+    try:
+        args.func(args)
+    except KeyboardInterrupt:
+        print()
+        print("Program closed by user.")
+        raise SystemExit(130)
 
 
 if __name__ == "__main__":

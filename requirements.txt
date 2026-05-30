@@ -1,4 +1,11 @@
+# Reddit API wrapper
 praw==7.7.1
+
+# Dataset summary and CSV analysis
 pandas==2.2.3
+
+# Extraction progress bars
 tqdm==4.67.1
+
+# Loads Reddit credentials from .env
 python-dotenv==1.2.1

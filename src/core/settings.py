@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -7,7 +8,7 @@ from pathlib import Path
 # Project paths
 # ------------------------------------------------------------
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 CONFIG_DIR = PROJECT_ROOT / "config"
 SETTINGS_FILE = CONFIG_DIR / "settings.json"
@@ -94,41 +95,13 @@ COLLECTION_MODE_MENU_ORDER = [
     "maximum_ces",
 ]
 
-
-def load_settings():
-    """
-    Loads config/settings.json.
-
-    If the settings file does not exist, it is created using DEFAULT_SETTINGS.
-    Missing keys are filled from DEFAULT_SETTINGS so older settings files
-    remain compatible after new options are added.
-    """
-
-    CONFIG_DIR.mkdir(exist_ok=True)
-
-    if not SETTINGS_FILE.exists():
-        save_settings(DEFAULT_SETTINGS)
-        return DEFAULT_SETTINGS.copy()
-
-    with open(SETTINGS_FILE, "r", encoding="utf-8") as file:
-        user_settings = json.load(file)
-
-    settings = DEFAULT_SETTINGS.copy()
-    settings.update(user_settings)
-
-    return settings
+SUBREDDIT_PATTERN = re.compile(r"^[A-Za-z0-9_]{3,21}$")
+UNSAFE_PATH_PARTS = {"", ".", ".."}
 
 
-def save_settings(settings):
-    """
-    Saves the current app settings to config/settings.json.
-    """
-
-    CONFIG_DIR.mkdir(exist_ok=True)
-
-    with open(SETTINGS_FILE, "w", encoding="utf-8") as file:
-        json.dump(settings, file, indent=2)
-
+# ------------------------------------------------------------
+# Validation helpers
+# ------------------------------------------------------------
 
 def validate_date_text(date_text, field_name):
     """
@@ -139,9 +112,161 @@ def validate_date_text(date_text, field_name):
     """
 
     try:
-        return datetime.strptime(date_text, "%Y-%m-%d")
+        return datetime.strptime(str(date_text).strip(), "%Y-%m-%d")
     except ValueError as error:
         raise ValueError(f"{field_name} must use YYYY-MM-DD format.") from error
+
+
+def validate_subreddit_name(subreddit):
+    """
+    Validates a subreddit name from settings.json.
+
+    Reddit subreddit names should be simple names such as rmit or RMIT_Study.
+    The user may include r/ at the start, but it is removed before validation.
+    """
+
+    cleaned_subreddit = str(subreddit).replace("r/", "").strip().strip("/")
+
+    if SUBREDDIT_PATTERN.fullmatch(cleaned_subreddit) is None:
+        raise ValueError(
+            "Subreddit must be 3-21 characters and only use letters, numbers, "
+            "or underscores. Example: rmit"
+        )
+
+    return cleaned_subreddit
+
+
+def validate_relative_output_path(path_text, field_name, expected_suffix):
+    """
+    Validates output paths stored in settings.json.
+
+    Output paths must stay inside the project folder and should not use absolute
+    paths or parent-directory traversal.
+    """
+
+    path = Path(str(path_text).strip())
+
+    if path.is_absolute():
+        raise ValueError(f"{field_name} must be a relative project path, not an absolute path.")
+
+    if path.suffix.lower() != expected_suffix:
+        raise ValueError(f"{field_name} must end with {expected_suffix}.")
+
+    for part in path.parts:
+        if part in UNSAFE_PATH_PARTS:
+            raise ValueError(f"{field_name} contains an unsafe path segment: {part}")
+
+    return str(path)
+
+
+def validate_settings_values(settings):
+    """
+    Validates config/settings.json values after loading.
+    """
+
+    validate_subreddit_name(settings.get("subreddit", ""))
+
+    start_datetime = validate_date_text(settings.get("start_date", ""), "Start date")
+
+    end_date = str(settings.get("end_date", "")).strip()
+
+    if end_date:
+        end_datetime = validate_date_text(end_date, "End date")
+
+        if end_datetime < start_datetime:
+            raise ValueError("End date must not be before start date.")
+
+    collection_mode = settings.get("collection_mode")
+
+    if collection_mode not in COLLECTION_MODES:
+        allowed_modes = ", ".join(COLLECTION_MODES.keys())
+        raise ValueError(f"Invalid collection_mode. Allowed values: {allowed_modes}")
+
+    validate_relative_output_path(settings.get("output_csv", ""), "output_csv", ".csv")
+    validate_relative_output_path(settings.get("output_json", ""), "output_json", ".json")
+
+
+def backup_broken_settings_file(reason):
+    """
+    Renames an unreadable/invalid settings file so the app can recover safely.
+    """
+
+    if not SETTINGS_FILE.exists():
+        return None
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_file = SETTINGS_FILE.with_name(f"settings.invalid_{timestamp}.json")
+    SETTINGS_FILE.rename(backup_file)
+
+    print()
+    print("settings.json could not be used.")
+    print(f"Reason: {reason}")
+    print(f"A backup was saved as: {backup_file.name}")
+    print("Default settings have been loaded instead.")
+
+    return backup_file
+
+
+# ------------------------------------------------------------
+# Settings load/save
+# ------------------------------------------------------------
+
+def load_settings():
+    """
+    Loads config/settings.json.
+
+    If the file is missing, it is created using DEFAULT_SETTINGS.
+    If the file is corrupted or invalid, it is backed up and defaults are used.
+    """
+
+    CONFIG_DIR.mkdir(exist_ok=True)
+
+    if not SETTINGS_FILE.exists():
+        save_settings(DEFAULT_SETTINGS)
+        return DEFAULT_SETTINGS.copy()
+
+    try:
+        with open(SETTINGS_FILE, "r", encoding="utf-8") as file:
+            user_settings = json.load(file)
+
+        if not isinstance(user_settings, dict):
+            raise ValueError("settings.json must contain a JSON object.")
+
+        settings = DEFAULT_SETTINGS.copy()
+        settings.update(user_settings)
+        validate_settings_values(settings)
+
+        return settings
+
+    except json.JSONDecodeError as error:
+        backup_broken_settings_file(f"Invalid JSON syntax: {error}")
+        save_settings(DEFAULT_SETTINGS)
+        return DEFAULT_SETTINGS.copy()
+
+    except ValueError as error:
+        backup_broken_settings_file(str(error))
+        save_settings(DEFAULT_SETTINGS)
+        return DEFAULT_SETTINGS.copy()
+
+
+def save_settings(settings):
+    """
+    Saves the current app settings to config/settings.json.
+    """
+
+    CONFIG_DIR.mkdir(exist_ok=True)
+    validate_settings_values(settings)
+
+    try:
+        with open(SETTINGS_FILE, "w", encoding="utf-8") as file:
+            json.dump(settings, file, indent=2)
+            file.write("\n")
+
+    except OSError as error:
+        raise OSError(
+            "Could not write config/settings.json. "
+            "Check folder permissions and try again."
+        ) from error
 
 
 def update_time_range(start_date, end_date):
@@ -153,7 +278,7 @@ def update_time_range(start_date, end_date):
     date at runtime.
     """
 
-    start_date = start_date.strip()
+    start_date = str(start_date).strip()
 
     if not start_date:
         raise ValueError("Start date is mandatory.")
@@ -162,8 +287,8 @@ def update_time_range(start_date, end_date):
 
     cleaned_end_date = ""
 
-    if end_date is not None and end_date.strip():
-        cleaned_end_date = end_date.strip()
+    if end_date is not None and str(end_date).strip():
+        cleaned_end_date = str(end_date).strip()
         end_datetime = validate_date_text(cleaned_end_date, "End date")
 
         if end_datetime < start_datetime:
@@ -199,7 +324,7 @@ def get_collection_mode_by_menu_number(menu_number):
     for mode_key in COLLECTION_MODE_MENU_ORDER:
         mode = COLLECTION_MODES[mode_key]
 
-        if mode["menu_number"] == menu_number:
+        if mode["menu_number"] == str(menu_number).strip():
             return mode_key
 
     return None
@@ -229,4 +354,4 @@ def format_optional_end_date(end_date):
     if end_date is None or not str(end_date).strip():
         return "Today when extraction runs"
 
-    return end_date
+    return str(end_date).strip()

@@ -2,17 +2,22 @@ import os
 from datetime import datetime, time, timezone
 from zoneinfo import ZoneInfo
 
-from dotenv import load_dotenv
 
-from .settings_manager import (
+try:
+    from dotenv import load_dotenv
+except ModuleNotFoundError:
+    load_dotenv = None
+
+from .settings import (
     PROJECT_ROOT,
     CONFIG_DIR,
     SETTINGS_FILE,
     KEYWORDS_FILE,
     load_settings,
-    save_settings,
     COLLECTION_MODES,
     get_active_collection_mode,
+    validate_settings_values,
+    validate_subreddit_name,
 )
 
 
@@ -22,10 +27,12 @@ from .settings_manager import (
 
 DATA_DIR = PROJECT_ROOT / "data"
 LOGS_DIR = PROJECT_ROOT / "logs"
+ENV_FILE = PROJECT_ROOT / ".env"
 
 LOG_FILE = LOGS_DIR / "reddit_extraction.log"
 
-
+CSV_OUTPUT_FILE = PROJECT_ROOT / settings["output_csv"]
+JSON_OUTPUT_FILE = PROJECT_ROOT / settings["output_json"]
 # ------------------------------------------------------------
 # User settings
 # ------------------------------------------------------------
@@ -33,13 +40,14 @@ LOG_FILE = LOGS_DIR / "reddit_extraction.log"
 # The menu updates that file; the extractor reads from it.
 
 SETTINGS = load_settings()
+validate_settings_values(SETTINGS)
 
 
 # ------------------------------------------------------------
 # Reddit extraction scope
 # ------------------------------------------------------------
 
-SUBREDDIT_NAME = SETTINGS["subreddit"].replace("r/", "").strip("/")
+SUBREDDIT_NAME = validate_subreddit_name(SETTINGS["subreddit"])
 SUBREDDIT_URL = f"https://www.reddit.com/r/{SUBREDDIT_NAME}/"
 
 LOCAL_TIMEZONE = ZoneInfo("Australia/Melbourne")
@@ -53,7 +61,7 @@ def parse_local_date(date_text, is_end_date=False):
     End dates finish at 23:59:59 so the selected end date is included.
     """
 
-    parsed_date = datetime.strptime(date_text, "%Y-%m-%d").date()
+    parsed_date = datetime.strptime(str(date_text).strip(), "%Y-%m-%d").date()
 
     if is_end_date:
         selected_time = time(23, 59, 59)
@@ -75,8 +83,8 @@ def get_effective_end_date_text():
 
     saved_end_date = SETTINGS.get("end_date", "")
 
-    if saved_end_date and saved_end_date.strip():
-        return saved_end_date.strip()
+    if saved_end_date and str(saved_end_date).strip():
+        return str(saved_end_date).strip()
 
     return datetime.now(tz=LOCAL_TIMEZONE).date().isoformat()
 
@@ -95,8 +103,7 @@ END_TIMESTAMP = END_DATE_UTC.timestamp()
 # Output files
 # ------------------------------------------------------------
 
-CSV_OUTPUT_FILE = PROJECT_ROOT / SETTINGS["output_csv"]
-JSON_OUTPUT_FILE = PROJECT_ROOT / SETTINGS["output_json"]
+
 
 
 # ------------------------------------------------------------
@@ -123,7 +130,8 @@ SLEEP_SECONDS_BETWEEN_POSTS = ACTIVE_COLLECTION_MODE["sleep_seconds_between_post
 # Environment variables
 # ------------------------------------------------------------
 
-load_dotenv(PROJECT_ROOT / ".env")
+if load_dotenv is not None:
+    load_dotenv(ENV_FILE)
 
 
 # ------------------------------------------------------------
@@ -166,11 +174,25 @@ def validate_config():
     DATA_DIR.mkdir(exist_ok=True)
     LOGS_DIR.mkdir(exist_ok=True)
 
+    if load_dotenv is None:
+        raise ModuleNotFoundError(
+            "python-dotenv is not installed. Run: pip install -r requirements.txt"
+        )
+
     if not SETTINGS_FILE.exists():
-        raise FileNotFoundError(f"Missing settings file: {SETTINGS_FILE}")
+        raise FileNotFoundError(
+            "Missing config/settings.json. The app could not create the settings file."
+        )
 
     if not KEYWORDS_FILE.exists():
-        raise FileNotFoundError(f"Missing keywords file: {KEYWORDS_FILE}")
+        raise FileNotFoundError(
+            "Missing config/keywords.json. Restore the keywords file before running extraction."
+        )
+
+    if not ENV_FILE.exists():
+        raise FileNotFoundError(
+            "Missing .env file. Run option 1 first: Setup Reddit credentials."
+        )
 
     if START_DATE_LOCAL > END_DATE_LOCAL:
         raise ValueError("Start date must not be after end date.")
@@ -193,7 +215,8 @@ def validate_config():
     if missing_values:
         missing_text = ", ".join(missing_values)
         raise ValueError(
-            f"Missing or incomplete Reddit API credentials in .env: {missing_text}"
+            f"Missing or incomplete Reddit API credentials in .env: {missing_text}. "
+            "Run option 1 again and enter your Reddit developer app values."
         )
 
 
@@ -202,4 +225,7 @@ def is_within_date_range(created_utc):
     Returns True when a Reddit UTC timestamp is inside the selected date range.
     """
 
-    return START_TIMESTAMP <= created_utc <= END_TIMESTAMP
+    try:
+        return START_TIMESTAMP <= float(created_utc) <= END_TIMESTAMP
+    except (TypeError, ValueError):
+        return False

@@ -1,0 +1,8 @@
+{
+    "subreddit": "rmit",
+    "start_date": "2026-03-01",
+    "end_date": "2026-05-29",
+    "collection_mode": "deep_ces",
+    "output_csv": "data/rmit_reddit_cs_dataset.csv",
+    "output_json": "data/rmit_reddit_cs_dataset.json"
+  }

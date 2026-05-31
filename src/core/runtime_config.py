@@ -34,6 +34,7 @@ LOG_FILE = LOGS_DIR / "reddit_extraction.log"
 CSV_OUTPUT_FILE = PROJECT_ROOT / settings["output_csv"]
 JSON_OUTPUT_FILE = PROJECT_ROOT / settings["output_json"]
 # ------------------------------------------------------------
+
 # User settings
 # ------------------------------------------------------------
 # config/settings.json is the user-editable state of the app.
